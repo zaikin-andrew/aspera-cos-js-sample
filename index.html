@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <script type="text/javascript" src="//d3gcli72yxqn2z.cloudfront.net/connect/v4/asperaweb-4.min.js"></script>
+    <script type="text/javascript"
+            src="//d3gcli72yxqn2z.cloudfront.net/connect/v4/connectinstaller-4.min.js"></script>
+
+</head>
+<body>
+<label for="fileName">File name is </label><input id="fileName">
+    <button onclick="downloadFile()">Download</button>
+    <button onclick="uploadFile()">Upload</button>
+</body>
+<script>
+    class AsperaService {
+        asperaWeb;
+        connectInstaller = '//d3gcli72yxqn2z.cloudfront.net/connect/v4';
+        connectMinVersion = '3.8.1';
+        connectSettings = {
+            allow_dialogs: true,
+            // use_absolute_destination_path: true,
+        };
+        async initAsperaConnect(selector) {
+            this.asperaWeb = new AW4.Connect({
+                sdkLocation: this.connectInstaller,
+                minVersion: this.connectMinVersion,
+            });
+            const asperaInstaller = new AW4.ConnectInstaller({
+                sdkLocation: this.connectInstaller,
+            });
+            asperaInstaller.supportsInstallingExtensions = true;
+
+            this.asperaWeb.addEventListener(AW4.Connect.EVENT.STATUS, (eventType, status) => {
+                console.warn('AsperaInstaller status: ', status);
+                switch (status) {
+                    case AW4.Connect.STATUS.INITIALIZING:
+                        asperaInstaller.showLaunching();
+                        break;
+                    case AW4.Connect.STATUS.FAILED:
+                        asperaInstaller.showDownload();
+                        break;
+                    case AW4.Connect.STATUS.OUTDATED:
+                        asperaInstaller.showUpdate();
+                        break;
+                    case AW4.Connect.STATUS.RUNNING:
+                        asperaInstaller.connected();
+                        break;
+                    case AW4.Connect.STATUS.EXTENSION_INSTALL:
+                        asperaInstaller.showExtensionInstall();
+                        break;
+                }
+            });
+
+            this.asperaWeb.addEventListener(
+                AW4.Connect.EVENT.TRANSFER,
+                (eventType, allTransfersInfo) => {
+                    if (allTransfersInfo.transfers.length) console.log('TRANSFER', eventType, allTransfersInfo)
+                }
+            );
+
+            const running = new Promise((resolve, reject) =>
+                this.asperaWeb.addEventListener(AW4.Connect.EVENT.STATUS, (eventType, status) => {
+                    switch (status) {
+                        case AW4.Connect.STATUS.FAILED:
+                            reject(status);
+                            break;
+                        case AW4.Connect.STATUS.RUNNING:
+                            resolve(status);
+                            break;
+                    }
+                })
+            );
+
+            const appId = this.asperaWeb.initSession();
+            console.warn('Connect init AppID: ', appId);
+            this.connectSettings.app_id = appId;
+
+            let dragDropEventTypeLast;
+            this.asperaWeb.setDragDropTargets(
+                selector,
+                {dragEnter: false, dragLeave: true, dragOver: true, drop: true},
+                dragDropObject => {
+                    // if (!this.isConnected) { return; }
+                    if (dragDropObject.event.type !== dragDropEventTypeLast) {
+                        console.log('DragDrop Event: ', dragDropObject.event.type);
+                        dragDropEventTypeLast = dragDropObject.event.type;
+
+                        switch (dragDropObject.event.type) {
+                            case 'dragover':
+                                this.isDragOver = true;
+                                console.log('DragDrop addClass .dragging-over-grid');
+                                break;
+                            case 'dragleave':
+                                this.isDragOver = false;
+                                console.log('DragDrop removeClass .dragging-over-grid');
+                                break;
+                            case 'drop':
+                                this.isDragOver = false;
+                                console.log('DragDrop removeClass .dragging-over-grid');
+                                console.log('DragDrop Object: ', dragDropObject);
+                                this.uploadFiles(dragDropObject.files);
+                                break;
+                        }
+                    }
+                }
+            );
+            return running;
+        }
+
+        async uploadFiles(data) {
+            console.log('--> action upload');
+            console.log('uploadFiles data: ', data);
+            if (data.dataTransfer.files.length === 0) {
+                return;
+            }
+
+            const paths = data.dataTransfer.files.map(file => ({source: file.name}));
+            console.log('uploadFiles paths: ', paths);
+            const resp = await fetch('http://localhost:3000/transferSpec/upload', {
+                method: 'POST',
+                body: JSON.stringify(paths),
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            const spec = await resp.json();
+            spec.authentication = 'token';
+            console.log(spec)
+            return this.asperaWeb.startTransferPromise(spec, this.connectSettings);
+        }
+
+        async downloadFiles(files) {
+            const resp = await fetch('http://localhost:3000/transferSpec', {
+                method: 'POST',
+                body: JSON.stringify(files),
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            const spec = await resp.json();
+            spec.authentication = 'token';
+            console.log(spec)
+            return this.asperaWeb.startTransferPromise(spec, this.connectSettings);
+        }
+
+        showSaveFileDialog() {
+            return new Promise((res, rej) => {
+                this.asperaWeb.showSaveFileDialog({
+                    success: obj => res(obj),
+                    error: err => rej(err.error),
+                })
+            })
+        }
+
+    }
+    let asperaService;
+    (async () => {
+        asperaService = new AsperaService();
+        await asperaService.initAsperaConnect();
+    })();
+
+    async function uploadFile() {
+        const dataTransfer = await asperaService.asperaWeb.showSelectFileDialogPromise();
+        await asperaService.uploadFiles(dataTransfer)
+    }
+
+    async function downloadFile() {
+        const fileName = document.getElementById('fileName').value;
+        await asperaService.downloadFiles([{"source": fileName}]);
+    }
+</script>
+</html>
+
